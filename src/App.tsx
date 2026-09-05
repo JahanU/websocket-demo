@@ -25,19 +25,23 @@ function App() {
   useEffect(() => {
     // SSE is server-to-client only, so the subscription rides on the URL and
     // changing it means reopening the stream.
+    console.log('updated subcribers: ', subscribed);
     const url = subscribed === null ? SERVER : `${SERVER}?symbols=${subscribed.join(",")}`;
+    console.log('url: ', url);
     const source = new EventSource(url);
 
     source.onopen = () => setStatus('Connected');
 
     source.addEventListener("snapshot", (event) => {
       const data: Tick[] = JSON.parse(event.data);
+      console.log('snapshot, data.. ', data);
       setQuotes(Object.fromEntries(data.map((tick) => [tick.symbol, tick])));
       setSymbols((prev) => (prev.length ? prev : data.map((tick) => tick.symbol)));
     });
 
     source.addEventListener("tick", (event) => {
       const data: Tick[] = JSON.parse(event.data);
+      console.log('tick, data.. ', data);
       setQuotes((prev) => {
         const next = { ...prev };
         for (const tick of data) next[tick.symbol] = tick;
@@ -54,9 +58,7 @@ function App() {
   const active = subscribed ?? symbols;
 
   const toggle = (symbol: string) => {
-    setSubscribed(active.includes(symbol)
-      ? active.filter((s) => s !== symbol)
-      : [...active, symbol]);
+    setSubscribed(active.includes(symbol) ? active.filter((s) => s !== symbol) : [...active, symbol])
   };
 
   const rows = active.map((symbol) => quotes[symbol]).filter(Boolean);
