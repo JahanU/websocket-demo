@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import "./App.css";
 const SERVER = `ws://localhost:3001/ws`;
 
-type connection = 'Connected' | 'Disconnected' | 'Error';
+type ConnectionStatus = 'Connected' | 'Disconnected' | 'Error';
 
-type rowData = {
+type Tick = {
   symbol: string;
   price: number;
   change: number;
@@ -16,13 +16,11 @@ type rowData = {
 
 function App() {
 
-  const [status, setStatus] = useState<connection>('Disconnected');
-  const [data, setData] = useState<rowData[]>([]);
-  const socketRef = useRef(null);
+  const [status, setStatus] = useState<ConnectionStatus>('Disconnected');
+  const [ticks, setTicks] = useState<Tick[]>([]);
 
   useEffect(() => {
     const socket = new WebSocket(SERVER);
-    socketRef.current = socket;
 
     socket.onopen = () => {
       setStatus('Connected');
@@ -32,7 +30,7 @@ function App() {
       const { type, data } = JSON.parse(event.data);
       if (type !== "snapshot" && type !== "tick") return;
       console.log(type, data);
-      setData(data);
+      setTicks(data);
     }
 
     socket.onclose = () => setStatus('Disconnected');
@@ -47,9 +45,9 @@ function App() {
         <span>Connection: {status}</span>
 
         <ul>
-          {data && data.map((row) => {
+          {ticks.map((row) => {
             return (
-              <li key={row.symbol + row.timestamp}>{row.symbol} {row.price}</li>
+              <li key={row.symbol}>{row.symbol} {row.price}</li>
             )
           })}
         </ul>
