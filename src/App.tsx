@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import "./App.css";
 const SERVER = `ws://localhost:3001/ws`;
@@ -17,10 +17,14 @@ type Tick = {
 function App() {
 
   const [status, setStatus] = useState<ConnectionStatus>('Disconnected');
-  const [ticks, setTicks] = useState<Tick[]>([]);
+  const [quotes, setQuotes] = useState<Record<string, Tick>>({});
+  const [symbols, setSymbols] = useState<string[]>([]);
+  const [subscribed, setSubscribed] = useState<string[]>([]);
+  const socketRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
     const socket = new WebSocket(SERVER);
+    socketRef.current = socket;
 
     socket.onopen = () => {
       setStatus('Connected');
@@ -28,9 +32,21 @@ function App() {
 
     socket.onmessage = (event) => {
       const { type, data } = JSON.parse(event.data);
-      if (type !== "snapshot" && type !== "tick") return;
-      console.log(type, data);
-      setTicks(data);
+      if (type === "snapshot") {
+        setQuotes(Object.fromEntries(data.map((tick: Tick) => [tick.symbol, tick])));
+        setSymbols(data.map((tick: Tick) => tick.symbol));
+        setSubscribed(data.map((tick: Tick) => tick.symbol));
+      } else if (type === "tick") {
+        // Ticks arrive one symbol at a time, so merge rather than replace.
+        setQuotes((prev) => {
+          const next = { ...prev };
+          for (const tick of data as Tick[])
+            next[tick.symbol] = tick;
+          return next;
+        });
+      } else if (type === "subscribed") {
+        setSubscribed(data);
+      }
     }
 
     socket.onclose = () => setStatus('Disconnected');
@@ -39,15 +55,44 @@ function App() {
     return () => socket.close();
   }, []);
 
+  const toggle = (symbol: string) => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+
+    socket.send(JSON.stringify({
+      type: subscribed.includes(symbol) ? "unsubscribe" : "subscribe",
+      symbols: [symbol],
+    }));
+  };
+
+  const rows = subscribed.map((symbol) => quotes[symbol]).filter(Boolean);
+
   return (
     <>
       <div className="card">
-        <span>Connection: {status}</span>
+        <span className="status" data-status={status}>{status}</span>
 
-        <ul>
-          {ticks.map((row) => {
+        <fieldset className="subscriptions">
+          <legend>Subscriptions</legend>
+          {symbols.map((symbol) => (
+            <label key={symbol}>
+              <input
+                type="checkbox"
+                checked={subscribed.includes(symbol)}
+                onChange={() => toggle(symbol)}
+              />
+              {symbol}
+            </label>
+          ))}
+        </fieldset>
+
+        <ul className="quotes">
+          {rows.map((row) => {
             return (
-              <li key={row.symbol}>{row.symbol} {row.price}</li>
+              <li className="quote" key={row.symbol}>
+                <span className="quote-symbol">{row.symbol}</span>
+                <span className="quote-price">{row.price.toFixed(2)}</span>
+              </li>
             )
           })}
         </ul>

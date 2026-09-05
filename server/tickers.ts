@@ -18,18 +18,27 @@ const seed = [
 
 const state = seed.map((s) => ({ ...s, open: s.price }));
 
+export const SYMBOLS = seed.map((s) => s.symbol);
+
+const toTick = (s: (typeof state)[number]): Tick => {
+  const change = s.price - s.open;
+
+  return {
+    symbol: s.symbol,
+    price: Number(s.price.toFixed(2)),
+    change: Number(change.toFixed(2)),
+    changePercent: Number(((change / s.open) * 100).toFixed(2)),
+    volume: Math.floor(Math.random() * 50_000) + 1_000,
+    timestamp: Date.now(),
+  };
+};
+
+// Current prices, unchanged — for snapshotting a newly connected client.
+export const currentTicks = (): Tick[] => state.map(toTick);
+
 // Random walk: each tick nudges the price by up to +/-0.4%.
 export const nextTicks = (): Tick[] =>
   state.map((s) => {
     s.price = Math.max(0.01, s.price * (1 + (Math.random() - 0.5) * 0.008));
-    const change = s.price - s.open;
-
-    return {
-      symbol: s.symbol,
-      price: Number(s.price.toFixed(2)),
-      change: Number(change.toFixed(2)),
-      changePercent: Number(((change / s.open) * 100).toFixed(2)),
-      volume: Math.floor(Math.random() * 50_000) + 1_000,
-      timestamp: Date.now(),
-    };
+    return toTick(s);
   });
