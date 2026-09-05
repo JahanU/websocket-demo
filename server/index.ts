@@ -1,5 +1,6 @@
 import type { ServerWebSocket } from "bun";
 import { SYMBOLS, currentTicks, nextTicks } from "./tickers.ts";
+import { broadcastToStreams, sseListenerCount, sseResponse } from "./sse.ts";
 
 const PORT = Number(process.env.PORT ?? 3001);
 const INTERVAL_MS = Number(process.env.TICK_INTERVAL_MS ?? 1000);
@@ -15,7 +16,14 @@ let clients = 0;
 const server = Bun.serve({
   port: PORT,
   fetch(req, server) {
-    const { pathname } = new URL(req.url);
+    const url = new URL(req.url);
+    const { pathname } = url;
+
+    if (pathname === "/sse") {
+      // A HEAD discards the body, so cancel() never fires and the listener leaks.
+      if (req.method !== "GET") return new Response(null, { status: 405, headers: { Allow: "GET" } });
+      return sseResponse(url);
+    }
 
     if (pathname === "/ws") {
       if (server.upgrade(req)) return;
@@ -23,7 +31,7 @@ const server = Bun.serve({
     }
 
     if (pathname === "/health") {
-      return Response.json({ ok: true, clients });
+      return Response.json({ ok: true, clients, streams: sseListenerCount() });
     }
 
     return new Response("Not found", { status: 404 });
@@ -74,11 +82,16 @@ const server = Bun.serve({
   },
 });
 
+// One clock drives both transports, so prices advance at the same rate either way.
 setInterval(() => {
-  if (clients === 0) return;
-  for (const tick of nextTicks()) {
+  if (clients === 0 && sseListenerCount() === 0) return;
+
+  const ticks = nextTicks();
+  for (const tick of ticks) {
     server.publish(topic(tick.symbol), JSON.stringify({ type: "tick", data: [tick] }));
   }
+  broadcastToStreams(ticks);
 }, INTERVAL_MS);
 
 console.log(`WebSocket server on ws://localhost:${PORT}/ws`);
+console.log(`SSE stream on     http://localhost:${PORT}/sse`);

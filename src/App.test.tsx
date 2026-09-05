@@ -3,24 +3,29 @@ import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import App from "./App";
 
-class MockWebSocket {
-  static OPEN = 1;
-  static last: MockWebSocket | null = null;
+class MockEventSource {
+  static CLOSED = 2;
+  static last: MockEventSource | null = null;
+  static opened: string[] = [];
 
   onopen: (() => void) | null = null;
-  onmessage: ((event: { data: string }) => void) | null = null;
-  onclose: (() => void) | null = null;
   onerror: (() => void) | null = null;
   readyState = 1;
   closed = false;
-  sent: string[] = [];
 
-  constructor() {
-    MockWebSocket.last = this;
+  private handlers = new Map<string, (event: { data: string }) => void>();
+
+  constructor(url: string) {
+    MockEventSource.last = this;
+    MockEventSource.opened.push(url);
   }
 
-  send(message: string) {
-    this.sent.push(message);
+  addEventListener(name: string, handler: (event: { data: string }) => void) {
+    this.handlers.set(name, handler);
+  }
+
+  emit(name: string, data: unknown) {
+    this.handlers.get(name)?.({ data: JSON.stringify(data) });
   }
 
   close() {
@@ -28,12 +33,9 @@ class MockWebSocket {
   }
 }
 
-const socket = () => MockWebSocket.last!;
+const source = () => MockEventSource.last!;
 
-const receive = (payload: unknown) =>
-  act(() => socket().onmessage?.({ data: JSON.stringify(payload) }));
-
-const lastSent = () => JSON.parse(socket().sent.at(-1)!);
+const receive = (name: string, data: unknown) => act(() => source().emit(name, data));
 
 const rows = () =>
   screen.queryAllByRole("listitem").map((li) => ({
@@ -51,11 +53,12 @@ const tick = (symbol: string, price: number) => ({
 });
 
 const snapshot = () =>
-  receive({ type: "snapshot", data: [tick("AAPL", 227.52), tick("MSFT", 441.18)] });
+  receive("snapshot", [tick("AAPL", 227.52), tick("MSFT", 441.18)]);
 
 beforeEach(() => {
-  MockWebSocket.last = null;
-  globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+  MockEventSource.last = null;
+  MockEventSource.opened = [];
+  globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
 });
 
 describe("App", () => {
@@ -64,10 +67,15 @@ describe("App", () => {
     expect(screen.getByText("Disconnected")).toHaveAttribute("data-status", "Disconnected");
   });
 
-  it("reports connected once the socket opens", () => {
+  it("reports connected once the stream opens", () => {
     render(<App />);
-    act(() => socket().onopen?.());
+    act(() => source().onopen?.());
     expect(screen.getByText("Connected")).toHaveAttribute("data-status", "Connected");
+  });
+
+  it("opens without a symbols filter before the first snapshot", () => {
+    render(<App />);
+    expect(MockEventSource.opened).toEqual(["http://localhost:3001/sse"]);
   });
 
   it("renders rows and subscribes to everything from the snapshot", () => {
@@ -81,12 +89,12 @@ describe("App", () => {
     expect(screen.getByLabelText("AAPL")).toBeChecked();
   });
 
-  it("merges single-symbol ticks instead of replacing the table", () => {
+  it("merges ticks instead of replacing the table", () => {
     render(<App />);
     snapshot();
     const before = screen.getAllByRole("listitem")[0];
 
-    receive({ type: "tick", data: [tick("AAPL", 228.10)] });
+    receive("tick", [tick("AAPL", 228.10)]);
 
     // MSFT is untouched by an AAPL-only tick.
     expect(rows()).toEqual([
@@ -97,50 +105,37 @@ describe("App", () => {
     expect(screen.getAllByRole("listitem")[0]).toBe(before);
   });
 
-  it("sends an unsubscribe when a checked symbol is toggled off", async () => {
+  it("reopens the stream with a symbols filter when a box is unticked", async () => {
     const user = userEvent.setup();
     render(<App />);
     snapshot();
+    const first = source();
 
     await user.click(screen.getByLabelText("AAPL"));
 
-    expect(lastSent()).toEqual({ type: "unsubscribe", symbols: ["AAPL"] });
-  });
-
-  it("sends a subscribe when an unchecked symbol is toggled on", async () => {
-    const user = userEvent.setup();
-    render(<App />);
-    snapshot();
-    receive({ type: "subscribed", data: ["MSFT"] });
-
-    await user.click(screen.getByLabelText("AAPL"));
-
-    expect(lastSent()).toEqual({ type: "subscribe", symbols: ["AAPL"] });
-  });
-
-  it("hides rows the server says are no longer subscribed", () => {
-    render(<App />);
-    snapshot();
-
-    receive({ type: "subscribed", data: ["MSFT"] });
-
+    expect(first.closed).toBe(true);
+    expect(MockEventSource.opened.at(-1)).toBe("http://localhost:3001/sse?symbols=MSFT");
     expect(rows()).toEqual([{ symbol: "MSFT", price: "441.18" }]);
     // The checkbox stays so it can be turned back on.
     expect(screen.getByLabelText("AAPL")).not.toBeChecked();
   });
 
-  it("ignores messages that are not price updates", () => {
+  it("reopens with an empty filter when everything is unticked", async () => {
+    const user = userEvent.setup();
     render(<App />);
     snapshot();
-    receive({ type: "pong" });
 
-    expect(rows()).toHaveLength(2);
+    await user.click(screen.getByLabelText("AAPL"));
+    await user.click(screen.getByLabelText("MSFT"));
+
+    expect(MockEventSource.opened.at(-1)).toBe("http://localhost:3001/sse?symbols=");
+    expect(rows()).toEqual([]);
   });
 
-  it("closes the socket on unmount", () => {
+  it("closes the stream on unmount", () => {
     const { unmount } = render(<App />);
-    const ws = socket();
+    const es = source();
     unmount();
-    expect(ws.closed).toBe(true);
+    expect(es.closed).toBe(true);
   });
 });

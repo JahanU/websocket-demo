@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import "./App.css";
-const SERVER = `ws://localhost:3001/ws`;
+const SERVER = `http://localhost:3001/sse`;
 
 type ConnectionStatus = 'Connected' | 'Disconnected' | 'Error';
 
@@ -19,53 +19,47 @@ function App() {
   const [status, setStatus] = useState<ConnectionStatus>('Disconnected');
   const [quotes, setQuotes] = useState<Record<string, Tick>>({});
   const [symbols, setSymbols] = useState<string[]>([]);
-  const [subscribed, setSubscribed] = useState<string[]>([]);
-  const socketRef = useRef<WebSocket | null>(null);
+  // null means "everything" — we don't know the symbol list until the first snapshot.
+  const [subscribed, setSubscribed] = useState<string[] | null>(null);
 
   useEffect(() => {
-    const socket = new WebSocket(SERVER);
-    socketRef.current = socket;
+    // SSE is server-to-client only, so the subscription rides on the URL and
+    // changing it means reopening the stream.
+    const url = subscribed === null ? SERVER : `${SERVER}?symbols=${subscribed.join(",")}`;
+    const source = new EventSource(url);
 
-    socket.onopen = () => {
-      setStatus('Connected');
-    }
+    source.onopen = () => setStatus('Connected');
 
-    socket.onmessage = (event) => {
-      const { type, data } = JSON.parse(event.data);
-      if (type === "snapshot") {
-        setQuotes(Object.fromEntries(data.map((tick: Tick) => [tick.symbol, tick])));
-        setSymbols(data.map((tick: Tick) => tick.symbol));
-        setSubscribed(data.map((tick: Tick) => tick.symbol));
-      } else if (type === "tick") {
-        // Ticks arrive one symbol at a time, so merge rather than replace.
-        setQuotes((prev) => {
-          const next = { ...prev };
-          for (const tick of data as Tick[])
-            next[tick.symbol] = tick;
-          return next;
-        });
-      } else if (type === "subscribed") {
-        setSubscribed(data);
-      }
-    }
+    source.addEventListener("snapshot", (event) => {
+      const data: Tick[] = JSON.parse(event.data);
+      setQuotes(Object.fromEntries(data.map((tick) => [tick.symbol, tick])));
+      setSymbols((prev) => (prev.length ? prev : data.map((tick) => tick.symbol)));
+    });
 
-    socket.onclose = () => setStatus('Disconnected');
-    socket.onerror = () => setStatus('Error');
+    source.addEventListener("tick", (event) => {
+      const data: Tick[] = JSON.parse(event.data);
+      setQuotes((prev) => {
+        const next = { ...prev };
+        for (const tick of data) next[tick.symbol] = tick;
+        return next;
+      });
+    });
 
-    return () => socket.close();
-  }, []);
+    // EventSource reconnects on its own; this only reflects the current state.
+    source.onerror = () => setStatus(source.readyState === EventSource.CLOSED ? 'Error' : 'Disconnected');
+
+    return () => source.close();
+  }, [subscribed]);
+
+  const active = subscribed ?? symbols;
 
   const toggle = (symbol: string) => {
-    const socket = socketRef.current;
-    if (!socket || socket.readyState !== WebSocket.OPEN) return;
-
-    socket.send(JSON.stringify({
-      type: subscribed.includes(symbol) ? "unsubscribe" : "subscribe",
-      symbols: [symbol],
-    }));
+    setSubscribed(active.includes(symbol)
+      ? active.filter((s) => s !== symbol)
+      : [...active, symbol]);
   };
 
-  const rows = subscribed.map((symbol) => quotes[symbol]).filter(Boolean);
+  const rows = active.map((symbol) => quotes[symbol]).filter(Boolean);
 
   return (
     <>
@@ -78,7 +72,7 @@ function App() {
             <label key={symbol}>
               <input
                 type="checkbox"
-                checked={subscribed.includes(symbol)}
+                checked={active.includes(symbol)}
                 onChange={() => toggle(symbol)}
               />
               {symbol}
