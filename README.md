@@ -32,7 +32,7 @@ This repository uses dedicated feature branches to walk through each real-time i
 | Branch | Description | Protocol |
 | :--- | :--- | :--- |
 | [`feature/web-socket`](../../tree/feature/web-socket) | Full-duplex, bi-directional real-time communication | WebSocket |
-| [`feature/SSE`](../../tree/feature/SSE) | Light-weight, server-to-client unidirectional streaming | Server-Sent Events |
+| [`feature/SSE`](../../tree/feature/SSE) | Light-weight, server-to-client unidirectional streaming. _(note: with Unidirectional, we need to send a new URL to establish an update, e.g., if we select a new stock)_ | Server-Sent Events |
 
 ### How to Switch Branches
 
