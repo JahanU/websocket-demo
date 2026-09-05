@@ -1,36 +1,48 @@
-# React + TypeScript + Vite
+# React WebSocket + SSE Demo
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+An interactive demo showcasing real-time communication patterns in React using **WebSockets** and **Server-Sent Events (SSE)**.
 
-Currently, two official plugins are available:
+> 🛠️ **Template Base:** Built on top of the [React-Bun-Vite-template](https://github.com/JahanU/React-Bun-Vite-template) starter.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+---
 
-## React Compiler
+## 🚀 Quick Start
 
-The React Compiler is enabled on this template. See [this documentation](https://react.dev/learn/react-compiler) for more information.
+### Prerequisites
 
-Note: This will impact Vite dev & build performances.
-You can also try [the experimental native React Compiler support in plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md#rust-react-compiler) by using `compiler: true` in the plugin options instead of using the Babel plugin.
+Ensure you have [Bun](https://bun.sh/) installed on your machine.
 
-## Expanding the Oxlint configuration
+### Running the App
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
+1. **Install dependencies**
+   bun install
 
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
-```
+2. **Start the backend server**
+   bun run dev:server
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
-# React-Bun-Vite-template
+3. **Start the React app** (in a separate terminal)
+   bun run dev
+
+---
+
+## 🔀 Exploring Features
+
+This repository uses dedicated feature branches to walk through each real-time implementation:
+
+| Branch | Description | Protocol |
+| :--- | :--- | :--- |
+| [`feature/web-socket`](../../tree/feature/web-socket) | Full-duplex, bi-directional real-time communication | WebSocket |
+| [`feature/SSE`](../../tree/feature/SSE) | Light-weight, server-to-client unidirectional streaming | Server-Sent Events |
+
+### How to Switch Branches
+
+* git checkout feature/web-socket
+* git checkout feature/SSE
+
+---
+
+## 🧰 Tech Stack
+
+* **Frontend:** React, Vite
+* **Runtime & Package Manager:** Bun
+* **Real-Time Protocols:** WebSockets, Server-Sent Events (SSE)
