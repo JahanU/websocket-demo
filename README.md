@@ -36,7 +36,7 @@ This repository uses dedicated feature branches to walk through each real-time i
 
 ### How to Switch Branches
 
-* git checkout feature/web-socket
+* git checkout feature/ws-pub-sub-per-topic
 * git checkout feature/SSE
 
 ---
