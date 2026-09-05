@@ -36,8 +36,8 @@ This repository uses dedicated feature branches to walk through each real-time i
 
 ### How to Switch Branches
 
-* git checkout feature/ws-pub-sub-per-topic
-* git checkout feature/SSE
+* git checkout [feature/ws-pub-sub-per-topic](https://github.com/JahanU/websocket-demo/pull/1)
+* git checkout [feature/SSE](https://github.com/JahanU/websocket-demo/pull/2)
 
 ---
 
