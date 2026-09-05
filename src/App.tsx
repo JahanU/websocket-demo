@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import "./App.css";
-const SERVER = `ws://localhost:3001/ws`;
+const SERVER = `http://localhost:3001/sse`;
 
-type connection = 'Connected' | 'Disconnected' | 'Error';
+type ConnectionStatus = 'Connected' | 'Disconnected' | 'Error';
 
-type rowData = {
+type Tick = {
   symbol: string;
   price: number;
   change: number;
@@ -16,40 +16,79 @@ type rowData = {
 
 function App() {
 
-  const [status, setStatus] = useState<connection>('Disconnected');
-  const [data, setData] = useState<rowData[]>([]);
-  const socketRef = useRef(null);
+  const [status, setStatus] = useState<ConnectionStatus>('Disconnected');
+  const [quotes, setQuotes] = useState<Record<string, Tick>>({});
+  const [symbols, setSymbols] = useState<string[]>([]);
+  // null means "everything" — we don't know the symbol list until the first snapshot.
+  const [subscribed, setSubscribed] = useState<string[] | null>(null);
 
   useEffect(() => {
-    const socket = new WebSocket(SERVER);
-    socketRef.current = socket;
+    // SSE is server-to-client only, so the subscription rides on the URL and
+    // changing it means reopening the stream.
+    console.log('updated subcribers: ', subscribed);
+    const url = subscribed === null ? SERVER : `${SERVER}?symbols=${subscribed.join(",")}`;
+    console.log('url: ', url);
+    const source = new EventSource(url);
 
-    socket.onopen = () => {
-      setStatus('Connected');
-    }
+    source.onopen = () => setStatus('Connected');
 
-    socket.onmessage = (event) => {
-      const { type, data } = JSON.parse(event.data);
-      if (type !== "snapshot" && type !== "tick") return;
-      console.log(type, data);
-      setData(data);
-    }
+    source.addEventListener("snapshot", (event) => {
+      const data: Tick[] = JSON.parse(event.data);
+      console.log('snapshot, data.. ', data);
+      setQuotes(Object.fromEntries(data.map((tick) => [tick.symbol, tick])));
+      setSymbols((prev) => (prev.length ? prev : data.map((tick) => tick.symbol)));
+    });
 
-    socket.onclose = () => setStatus('Disconnected');
-    socket.onerror = () => setStatus('Error');
+    source.addEventListener("tick", (event) => {
+      const data: Tick[] = JSON.parse(event.data);
+      console.log('tick, data.. ', data);
+      setQuotes((prev) => {
+        const next = { ...prev };
+        for (const tick of data) next[tick.symbol] = tick;
+        return next;
+      });
+    });
 
-    return () => socket.close();
-  }, []);
+    // EventSource reconnects on its own; this only reflects the current state.
+    source.onerror = () => setStatus(source.readyState === EventSource.CLOSED ? 'Error' : 'Disconnected');
+
+    return () => source.close();
+  }, [subscribed]);
+
+  const active = subscribed ?? symbols;
+
+  const toggle = (symbol: string) => {
+    setSubscribed(active.includes(symbol) ? active.filter((s) => s !== symbol) : [...active, symbol])
+  };
+
+  const rows = active.map((symbol) => quotes[symbol]).filter(Boolean);
 
   return (
     <>
       <div className="card">
-        <span>Connection: {status}</span>
+        <span className="status" data-status={status}>{status}</span>
 
-        <ul>
-          {data && data.map((row) => {
+        <fieldset className="subscriptions">
+          <legend>Subscriptions</legend>
+          {symbols.map((symbol) => (
+            <label key={symbol}>
+              <input
+                type="checkbox"
+                checked={active.includes(symbol)}
+                onChange={() => toggle(symbol)}
+              />
+              {symbol}
+            </label>
+          ))}
+        </fieldset>
+
+        <ul className="quotes">
+          {rows.map((row) => {
             return (
-              <li key={row.symbol + row.timestamp}>{row.symbol} {row.price}</li>
+              <li className="quote" key={row.symbol}>
+                <span className="quote-symbol">{row.symbol}</span>
+                <span className="quote-price">{row.price.toFixed(2)}</span>
+              </li>
             )
           })}
         </ul>

@@ -1,13 +1,29 @@
-import { nextTicks } from "./tickers.ts";
+import type { ServerWebSocket } from "bun";
+import { SYMBOLS, currentTicks, nextTicks } from "./tickers.ts";
+import { broadcastToStreams, sseListenerCount, sseResponse } from "./sse.ts";
 
 const PORT = Number(process.env.PORT ?? 3001);
 const INTERVAL_MS = Number(process.env.TICK_INTERVAL_MS ?? 1000);
-const TOPIC = "prices";
+
+// One pub/sub topic per symbol, so each client only receives what it asked for.
+const topic = (symbol: string) => `price:${symbol}`;
+
+const subscriptionsOf = (ws: ServerWebSocket<unknown>) =>
+  SYMBOLS.filter((symbol) => ws.isSubscribed(topic(symbol)));
+
+let clients = 0;
 
 const server = Bun.serve({
   port: PORT,
   fetch(req, server) {
-    const { pathname } = new URL(req.url);
+    const url = new URL(req.url);
+    const { pathname } = url;
+
+    if (pathname === "/sse") {
+      // A HEAD discards the body, so cancel() never fires and the listener leaks.
+      if (req.method !== "GET") return new Response(null, { status: 405, headers: { Allow: "GET" } });
+      return sseResponse(url);
+    }
 
     if (pathname === "/ws") {
       if (server.upgrade(req)) return;
@@ -15,31 +31,67 @@ const server = Bun.serve({
     }
 
     if (pathname === "/health") {
-      return Response.json({ ok: true, clients: server.subscriberCount(TOPIC) });
+      return Response.json({ ok: true, clients, streams: sseListenerCount() });
     }
 
     return new Response("Not found", { status: 404 });
   },
   websocket: {
     open(ws) {
-      ws.subscribe(TOPIC);
+      clients++;
+      // Everything is subscribed by default; the client narrows it down.
+      for (const symbol of SYMBOLS) ws.subscribe(topic(symbol));
       // Send a full snapshot immediately so a new client isn't blank.
-      ws.send(JSON.stringify({ type: "snapshot", data: nextTicks() }));
-      console.log(`client connected (${server.subscriberCount(TOPIC)} total)`);
+      ws.send(JSON.stringify({ type: "snapshot", data: currentTicks() }));
+      console.log(`client connected (${clients} total)`);
     },
     close() {
-      console.log(`client disconnected (${server.subscriberCount(TOPIC)} left)`);
+      clients--;
+      console.log(`client disconnected (${clients} left)`);
     },
     message(ws, message) {
-      // Not needed for the feed, but lets the client verify the socket is alive.
-      if (message === "ping") ws.send(JSON.stringify({ type: "pong" }));
+      if (message === "ping") {
+        ws.send(JSON.stringify({ type: "pong" }));
+        return;
+      }
+      console.log('message back', message);
+      let msg;
+      try {
+        msg = JSON.parse(String(message));
+      } catch {
+        ws.send(JSON.stringify({ type: "error", message: "Invalid JSON" }));
+        return;
+      }
+
+      if (msg.type !== "subscribe" && msg.type !== "unsubscribe") {
+        ws.send(JSON.stringify({ type: "error", message: `Unknown type: ${msg.type}` }));
+        return;
+      }
+
+      const requested: string[] = Array.isArray(msg.symbols) ? msg.symbols : [];
+      for (const symbol of requested.filter((s) => SYMBOLS.includes(s))) {
+        if (msg.type === "subscribe")
+          ws.subscribe(topic(symbol));
+        else
+          ws.unsubscribe(topic(symbol));
+      }
+
+      // Ack with the authoritative list so the client never guesses its own state.
+      ws.send(JSON.stringify({ type: "subscribed", data: subscriptionsOf(ws) }));
     },
   },
 });
 
+// One clock drives both transports, so prices advance at the same rate either way.
 setInterval(() => {
-  if (server.subscriberCount(TOPIC) === 0) return;
-  server.publish(TOPIC, JSON.stringify({ type: "tick", data: nextTicks() }));
+  if (clients === 0 && sseListenerCount() === 0) return;
+
+  const ticks = nextTicks();
+  for (const tick of ticks) {
+    server.publish(topic(tick.symbol), JSON.stringify({ type: "tick", data: [tick] }));
+  }
+  broadcastToStreams(ticks);
 }, INTERVAL_MS);
 
 console.log(`WebSocket server on ws://localhost:${PORT}/ws`);
+console.log(`SSE stream on     http://localhost:${PORT}/sse`);
