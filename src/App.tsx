@@ -1,44 +1,59 @@
-import { useEffect, useState } from "react";
-import { type User, fetchUsers } from "./services/api";
+import { useEffect, useRef, useState } from "react";
+
 import "./App.css";
+const SERVER = `ws://localhost:3001/ws`;
+
+type connection = 'Connected' | 'Disconnected' | 'Error';
+
+type rowData = {
+  symbol: string;
+  price: number;
+  change: number;
+  changePercent: number;
+  volume: number;
+  timestamp: number;
+}
 
 function App() {
-  const [count, setCount] = useState(0);
-  const [users, setUsers] = useState<User[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+
+  const [status, setStatus] = useState<connection>('Disconnected');
+  const [data, setData] = useState<rowData[]>([]);
+  const socketRef = useRef(null);
 
   useEffect(() => {
-    fetchUsers()
-      .then((data) => setUsers(data))
-      .finally(() => setIsLoading(false));
+    const socket = new WebSocket(SERVER);
+    socketRef.current = socket;
+
+    socket.onopen = () => {
+      setStatus('Connected');
+    }
+
+    socket.onmessage = (event) => {
+      const { type, data } = JSON.parse(event.data);
+      if (type !== "snapshot" && type !== "tick") return;
+      console.log(type, data);
+      setData(data);
+    }
+
+    socket.onclose = () => setStatus('Disconnected');
+    socket.onerror = () => setStatus('Error');
+
+    return () => socket.close();
   }, []);
 
   return (
     <>
-      <h1>Vite + React</h1>
       <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p style={{ marginTop: "1rem" }}>
-          Edit <code>src/App.tsx</code> and save to test HMR
-        </p>
-      </div>
+        <span>Connection: {status}</span>
 
-      <div className="card data-section">
-        <h2>Team Members</h2>
-        {isLoading ? (
-          <p>Loading users...</p>
-        ) : (
-          <ul className="user-list">
-            {users.map((user) => (
-              <li key={user.id} className="user-item">
-                <span className="user-name">{user.name}</span>
-                <span className="user-role">{user.role}</span>
-              </li>
-            ))}
-          </ul>
-        )}
+        <ul>
+          {data && data.map((row) => {
+            return (
+              <li key={row.symbol + row.timestamp}>{row.symbol} {row.price}</li>
+            )
+          })}
+        </ul>
+
       </div>
     </>
   );
