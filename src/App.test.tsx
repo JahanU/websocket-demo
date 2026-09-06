@@ -1,43 +1,222 @@
-import { describe, expect, it } from "bun:test";
-import { render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, jest } from "bun:test";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import App from "./App";
 
-describe("App Component", () => {
-  it("renders heading", () => {
+class MockWebSocket {
+  static OPEN = 1;
+  static last: MockWebSocket | null = null;
+  static instances: MockWebSocket[] = [];
+
+  onopen: (() => void) | null = null;
+  onmessage: ((event: { data: string }) => void) | null = null;
+  onclose: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  readyState = 1;
+  closed = false;
+  sent: string[] = [];
+
+  constructor() {
+    MockWebSocket.last = this;
+    MockWebSocket.instances.push(this);
+  }
+
+  send(message: string) {
+    this.sent.push(message);
+  }
+
+  close() {
+    this.closed = true;
+  }
+}
+
+const socket = () => MockWebSocket.last!;
+
+const receive = (payload: unknown) =>
+  act(() => socket().onmessage?.({ data: JSON.stringify(payload) }));
+
+const lastSent = () => JSON.parse(socket().sent.at(-1)!);
+
+const rows = () =>
+  screen.queryAllByRole("listitem").map((li) => ({
+    symbol: li.querySelector(".quote-symbol")?.textContent,
+    price: li.querySelector(".quote-price")?.textContent,
+  }));
+
+const tick = (symbol: string, price: number) => ({
+  symbol,
+  price,
+  change: 0,
+  changePercent: 0,
+  volume: 100,
+  timestamp: Date.now(),
+});
+
+const snapshot = () =>
+  receive({ type: "snapshot", data: [tick("AAPL", 227.52), tick("MSFT", 441.18)] });
+
+beforeEach(() => {
+  MockWebSocket.last = null;
+  MockWebSocket.instances = [];
+  globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+});
+
+afterEach(() => {
+  jest.useRealTimers();
+});
+
+describe("App", () => {
+  it("starts disconnected", () => {
     render(<App />);
-    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Vite + React");
+    expect(screen.getByText("Disconnected")).toHaveAttribute("data-status", "Disconnected");
   });
 
-  it("increments counter on click", async () => {
+  it("reports connected once the socket opens", () => {
+    render(<App />);
+    act(() => socket().onopen?.());
+    expect(screen.getByText("Connected")).toHaveAttribute("data-status", "Connected");
+  });
+
+  it("renders rows and subscribes to everything from the snapshot", () => {
+    render(<App />);
+    snapshot();
+
+    expect(rows()).toEqual([
+      { symbol: "AAPL", price: "227.52" },
+      { symbol: "MSFT", price: "441.18" },
+    ]);
+    expect(screen.getByLabelText("AAPL")).toBeChecked();
+  });
+
+  it("merges single-symbol ticks instead of replacing the table", () => {
+    render(<App />);
+    snapshot();
+    const before = screen.getAllByRole("listitem")[0];
+
+    receive({ type: "tick", data: [tick("AAPL", 228.10)] });
+
+    // MSFT is untouched by an AAPL-only tick.
+    expect(rows()).toEqual([
+      { symbol: "AAPL", price: "228.10" },
+      { symbol: "MSFT", price: "441.18" },
+    ]);
+    // Same DOM node kept across ticks: the key is the symbol, not the timestamp.
+    expect(screen.getAllByRole("listitem")[0]).toBe(before);
+  });
+
+  it("sends an unsubscribe when a checked symbol is toggled off", async () => {
     const user = userEvent.setup();
     render(<App />);
-    const button = screen.getByRole("button", { name: /count is 0/i });
+    snapshot();
 
-    await user.click(button);
-    expect(screen.getByRole("button", { name: /count is 1/i })).toBeInTheDocument();
+    await user.click(screen.getByLabelText("AAPL"));
 
-    await user.click(button);
-    expect(screen.getByRole("button", { name: /count is 2/i })).toBeInTheDocument();
+    expect(lastSent()).toEqual({ type: "unsubscribe", symbols: ["AAPL"] });
   });
 
-  it("finds elements using querySelector", () => {
-    const { container } = render(<App />);
-    const cardElement = container.querySelector(".card");
-    const codeElement = container.querySelector("code");
-
-    expect(cardElement).not.toBeNull();
-    expect(cardElement).toBeInTheDocument();
-    expect(codeElement).toHaveTextContent("src/App.tsx");
-  });
-
-  it("loads and displays users from mock API", async () => {
+  it("sends a subscribe when an unchecked symbol is toggled on", async () => {
+    const user = userEvent.setup();
     render(<App />);
-    expect(screen.getByText("Loading users...")).toBeInTheDocument();
+    snapshot();
+    receive({ type: "subscribed", data: ["MSFT"] });
 
-    const userAlice = await screen.findByText("Alice Johnson");
-    expect(userAlice).toBeInTheDocument();
-    expect(screen.getByText("Frontend Engineer")).toBeInTheDocument();
-    expect(screen.getByText("Bob Smith")).toBeInTheDocument();
+    await user.click(screen.getByLabelText("AAPL"));
+
+    expect(lastSent()).toEqual({ type: "subscribe", symbols: ["AAPL"] });
+  });
+
+  it("hides rows the server says are no longer subscribed", () => {
+    render(<App />);
+    snapshot();
+
+    receive({ type: "subscribed", data: ["MSFT"] });
+
+    expect(rows()).toEqual([{ symbol: "MSFT", price: "441.18" }]);
+    // The checkbox stays so it can be turned back on.
+    expect(screen.getByLabelText("AAPL")).not.toBeChecked();
+  });
+
+  it("ignores messages that are not price updates", () => {
+    render(<App />);
+    snapshot();
+    receive({ type: "pong" });
+
+    expect(rows()).toHaveLength(2);
+  });
+
+  it("closes the socket on unmount", () => {
+    const { unmount } = render(<App />);
+    const ws = socket();
+    unmount();
+    expect(ws.closed).toBe(true);
+  });
+
+  it("reconnects with retry delay after socket is closed", () => {
+    jest.useFakeTimers();
+    render(<App />);
+    const initialSocket = socket();
+    act(() => initialSocket.onopen?.());
+    expect(screen.getByText("Connected")).toBeInTheDocument();
+
+    // Socket disconnects
+    act(() => initialSocket.onclose?.());
+    expect(screen.getByText("Disconnected")).toBeInTheDocument();
+
+    // Not reconnected yet before delay
+    expect(MockWebSocket.instances.length).toBe(1);
+
+    // Fast-forward 1000ms
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+
+    // New connection created
+    expect(MockWebSocket.instances.length).toBe(2);
+    const newSocket = socket();
+    expect(newSocket).not.toBe(initialSocket);
+
+    // Reconnecting sets status to Connected
+    act(() => newSocket.onopen?.());
+    expect(screen.getByText("Connected")).toBeInTheDocument();
+  });
+
+  it("retries again if reconnect attempt fails", () => {
+    jest.useFakeTimers();
+    render(<App />);
+    const socket1 = socket();
+
+    act(() => socket1.onclose?.());
+    expect(MockWebSocket.instances.length).toBe(1);
+
+    // After 1000ms, retry 1 runs
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+    expect(MockWebSocket.instances.length).toBe(2);
+    const socket2 = socket();
+
+    // Retry 1 also closes
+    act(() => socket2.onclose?.());
+
+    // After another 1000ms, retry 2 runs
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+    expect(MockWebSocket.instances.length).toBe(3);
+  });
+
+  it("does not attempt to reconnect after unmount", () => {
+    jest.useFakeTimers();
+    const { unmount } = render(<App />);
+    const initialSocket = socket();
+    act(() => initialSocket.onclose?.());
+
+    unmount();
+
+    act(() => {
+      jest.advanceTimersByTime(5000);
+    });
+
+    expect(MockWebSocket.instances.length).toBe(1);
   });
 });

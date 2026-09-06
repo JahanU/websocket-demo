@@ -3,9 +3,9 @@ import { useEffect, useRef, useState } from "react";
 import "./App.css";
 const SERVER = `ws://localhost:3001/ws`;
 
-type connection = 'Connected' | 'Disconnected' | 'Error';
+type ConnectionStatus = 'Connected' | 'Disconnected' | 'Error';
 
-type rowData = {
+type Tick = {
   symbol: string;
   price: number;
   change: number;
@@ -16,40 +16,102 @@ type rowData = {
 
 function App() {
 
-  const [status, setStatus] = useState<connection>('Disconnected');
-  const [data, setData] = useState<rowData[]>([]);
-  const socketRef = useRef(null);
-
+  const [status, setStatus] = useState<ConnectionStatus>('Disconnected');
+  const [quotes, setQuotes] = useState<Record<string, Tick>>({});
+  const [symbols, setSymbols] = useState<string[]>([]);
+  const [subscribed, setSubscribed] = useState<string[]>([]);
+  const socketRef = useRef<WebSocket | null>(null);
   useEffect(() => {
-    const socket = new WebSocket(SERVER);
-    socketRef.current = socket;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let isMounted = true;
+    function connect() {
+      if (!isMounted) return;
 
-    socket.onopen = () => {
-      setStatus('Connected');
+      const socket = new WebSocket(SERVER);
+      socketRef.current = socket;
+
+      socket.onopen = () => {
+        if (!isMounted) return;
+        setStatus('Connected');
+      };
+
+      socket.onmessage = (event) => {
+        const { type, data } = JSON.parse(event.data);
+        if (type === "snapshot") {
+          setQuotes(Object.fromEntries(data.map((tick: Tick) => [tick.symbol, tick])));
+          setSymbols(data.map((tick: Tick) => tick.symbol));
+          setSubscribed(data.map((tick: Tick) => tick.symbol));
+        } else if (type === "tick") {
+          // Ticks arrive one symbol at a time, so merge rather than replace.
+          setQuotes((prev) => {
+            const next = { ...prev };
+            for (const tick of data as Tick[])
+              next[tick.symbol] = tick;
+            return next;
+          });
+        } else if (type === "subscribed") {
+          setSubscribed(data);
+        }
+      };
+
+      socket.onclose = () => {
+        if (!isMounted) return;
+        setStatus('Disconnected');
+        timeoutId = setTimeout(connect, 1000);
+      };
+
+      socket.onerror = () => {
+        if (!isMounted) return;
+      };
     }
 
-    socket.onmessage = (event) => {
-      const { type, data } = JSON.parse(event.data);
-      if (type !== "snapshot" && type !== "tick") return;
-      console.log(type, data);
-      setData(data);
-    }
+    connect();
 
-    socket.onclose = () => setStatus('Disconnected');
-    socket.onerror = () => setStatus('Error');
-
-    return () => socket.close();
+    return () => {
+      isMounted = false;
+      if (timeoutId) clearTimeout(timeoutId);
+      socketRef.current?.close();
+    };
   }, []);
+
+  const toggle = (symbol: string) => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+
+    socket.send(JSON.stringify({
+      type: subscribed.includes(symbol) ? "unsubscribe" : "subscribe",
+      symbols: [symbol],
+    }));
+  };
+
+  const rows = subscribed.map((symbol) => quotes[symbol]).filter(Boolean);
 
   return (
     <>
       <div className="card">
-        <span>Connection: {status}</span>
+        <span className="status" data-status={status}>{status}</span>
 
-        <ul>
-          {data && data.map((row) => {
+        <fieldset className="subscriptions">
+          <legend>Subscriptions</legend>
+          {symbols.map((symbol) => (
+            <label key={symbol}>
+              <input
+                type="checkbox"
+                checked={subscribed.includes(symbol)}
+                onChange={() => toggle(symbol)}
+              />
+              {symbol}
+            </label>
+          ))}
+        </fieldset>
+
+        <ul className="quotes">
+          {rows.map((row) => {
             return (
-              <li key={row.symbol + row.timestamp}>{row.symbol} {row.price}</li>
+              <li className="quote" key={row.symbol}>
+                <span className="quote-symbol">{row.symbol}</span>
+                <span className="quote-price">{row.price.toFixed(2)}</span>
+              </li>
             )
           })}
         </ul>
