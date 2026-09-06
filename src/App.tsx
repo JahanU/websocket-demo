@@ -21,38 +21,57 @@ function App() {
   const [symbols, setSymbols] = useState<string[]>([]);
   const [subscribed, setSubscribed] = useState<string[]>([]);
   const socketRef = useRef<WebSocket | null>(null);
-
   useEffect(() => {
-    const socket = new WebSocket(SERVER);
-    socketRef.current = socket;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let isMounted = true;
+    function connect() {
+      if (!isMounted) return;
 
-    socket.onopen = () => {
-      setStatus('Connected');
+      const socket = new WebSocket(SERVER);
+      socketRef.current = socket;
+
+      socket.onopen = () => {
+        if (!isMounted) return;
+        setStatus('Connected');
+      };
+
+      socket.onmessage = (event) => {
+        const { type, data } = JSON.parse(event.data);
+        if (type === "snapshot") {
+          setQuotes(Object.fromEntries(data.map((tick: Tick) => [tick.symbol, tick])));
+          setSymbols(data.map((tick: Tick) => tick.symbol));
+          setSubscribed(data.map((tick: Tick) => tick.symbol));
+        } else if (type === "tick") {
+          // Ticks arrive one symbol at a time, so merge rather than replace.
+          setQuotes((prev) => {
+            const next = { ...prev };
+            for (const tick of data as Tick[])
+              next[tick.symbol] = tick;
+            return next;
+          });
+        } else if (type === "subscribed") {
+          setSubscribed(data);
+        }
+      };
+
+      socket.onclose = () => {
+        if (!isMounted) return;
+        setStatus('Disconnected');
+        timeoutId = setTimeout(connect, 1000);
+      };
+
+      socket.onerror = () => {
+        if (!isMounted) return;
+      };
     }
 
-    socket.onmessage = (event) => {
-      const { type, data } = JSON.parse(event.data);
-      if (type === "snapshot") {
-        setQuotes(Object.fromEntries(data.map((tick: Tick) => [tick.symbol, tick])));
-        setSymbols(data.map((tick: Tick) => tick.symbol));
-        setSubscribed(data.map((tick: Tick) => tick.symbol));
-      } else if (type === "tick") {
-        // Ticks arrive one symbol at a time, so merge rather than replace.
-        setQuotes((prev) => {
-          const next = { ...prev };
-          for (const tick of data as Tick[])
-            next[tick.symbol] = tick;
-          return next;
-        });
-      } else if (type === "subscribed") {
-        setSubscribed(data);
-      }
-    }
+    connect();
 
-    socket.onclose = () => setStatus('Disconnected');
-    socket.onerror = () => setStatus('Error');
-
-    return () => socket.close();
+    return () => {
+      isMounted = false;
+      if (timeoutId) clearTimeout(timeoutId);
+      socketRef.current?.close();
+    };
   }, []);
 
   const toggle = (symbol: string) => {

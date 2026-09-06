@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, jest } from "bun:test";
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import App from "./App";
@@ -6,6 +6,7 @@ import App from "./App";
 class MockWebSocket {
   static OPEN = 1;
   static last: MockWebSocket | null = null;
+  static instances: MockWebSocket[] = [];
 
   onopen: (() => void) | null = null;
   onmessage: ((event: { data: string }) => void) | null = null;
@@ -17,6 +18,7 @@ class MockWebSocket {
 
   constructor() {
     MockWebSocket.last = this;
+    MockWebSocket.instances.push(this);
   }
 
   send(message: string) {
@@ -55,7 +57,12 @@ const snapshot = () =>
 
 beforeEach(() => {
   MockWebSocket.last = null;
+  MockWebSocket.instances = [];
   globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+});
+
+afterEach(() => {
+  jest.useRealTimers();
 });
 
 describe("App", () => {
@@ -142,5 +149,74 @@ describe("App", () => {
     const ws = socket();
     unmount();
     expect(ws.closed).toBe(true);
+  });
+
+  it("reconnects with retry delay after socket is closed", () => {
+    jest.useFakeTimers();
+    render(<App />);
+    const initialSocket = socket();
+    act(() => initialSocket.onopen?.());
+    expect(screen.getByText("Connected")).toBeInTheDocument();
+
+    // Socket disconnects
+    act(() => initialSocket.onclose?.());
+    expect(screen.getByText("Disconnected")).toBeInTheDocument();
+
+    // Not reconnected yet before delay
+    expect(MockWebSocket.instances.length).toBe(1);
+
+    // Fast-forward 1000ms
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+
+    // New connection created
+    expect(MockWebSocket.instances.length).toBe(2);
+    const newSocket = socket();
+    expect(newSocket).not.toBe(initialSocket);
+
+    // Reconnecting sets status to Connected
+    act(() => newSocket.onopen?.());
+    expect(screen.getByText("Connected")).toBeInTheDocument();
+  });
+
+  it("retries again if reconnect attempt fails", () => {
+    jest.useFakeTimers();
+    render(<App />);
+    const socket1 = socket();
+
+    act(() => socket1.onclose?.());
+    expect(MockWebSocket.instances.length).toBe(1);
+
+    // After 1000ms, retry 1 runs
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+    expect(MockWebSocket.instances.length).toBe(2);
+    const socket2 = socket();
+
+    // Retry 1 also closes
+    act(() => socket2.onclose?.());
+
+    // After another 1000ms, retry 2 runs
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+    expect(MockWebSocket.instances.length).toBe(3);
+  });
+
+  it("does not attempt to reconnect after unmount", () => {
+    jest.useFakeTimers();
+    const { unmount } = render(<App />);
+    const initialSocket = socket();
+    act(() => initialSocket.onclose?.());
+
+    unmount();
+
+    act(() => {
+      jest.advanceTimersByTime(5000);
+    });
+
+    expect(MockWebSocket.instances.length).toBe(1);
   });
 });
